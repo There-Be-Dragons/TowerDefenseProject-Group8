@@ -1,4 +1,3 @@
-
 using System.Collections;
 using UnityEngine;
 
@@ -6,6 +5,7 @@ public class ZombieSpawner : MonoBehaviour
 {
     [SerializeField] public GameObject zombiePrefab;
     [SerializeField] public PathController path;
+    [SerializeField] public ZombieController zombieController;
 
     [SerializeField] public float spawnInterval = 1f;
     [SerializeField] public int numberOfSpawners = 1;
@@ -14,26 +14,48 @@ public class ZombieSpawner : MonoBehaviour
 
     private void Update()
     {
-        if (!isSpawning) SpawnWave();
+                
+        if (!isSpawning && GameManager.Instance.isNight) SpawnWave();
+    }
+
+    private void Start()
+    {
+        GameManager.Instance.OnNightStart.AddListener(NewNight);
+    }
+
+    public void NewNight()
+    {
+        spawnInterval -= GameManager.Instance.nightNumber * 0.1f;
+        if (GameManager.Instance.nightNumber % 10 == 0)
+        {            
+            spawnInterval *= 1.5f;
+        }
+
+        if(GameManager.Instance.nightNumber % 4 == 0)
+        {
+            numberOfSpawners += 1;            
+        }
+
     }
 
     public void SpawnWave()
     {
-        if (isSpawning || zombiePrefab == null || path == null || path.waypoints == null || path.waypoints.Length < 2) return;
-        if (!zombiePrefab.TryGetComponent<Zombie>(out _)) return;
-        for(int i = 0; i < numberOfSpawners; i++)
-        {
-            StartCoroutine(Spawn());
-        }
-        
+        if (isSpawning || !GameManager.Instance.isNight) return;       
+
+        isSpawning = true;
+        StartCoroutine(Spawn());
     }
 
     private IEnumerator Spawn()
     {
-        isSpawning = true;
+        for (int i = 0; i < numberOfSpawners; i++)
+        {
+            if (!GameManager.Instance.isNight) break;
 
-        GameObject zombie = Instantiate(zombiePrefab, path.waypoints[0].position, Quaternion.identity);
-        zombie.GetComponent<Zombie>().Initialize(path);
+            GameObject zombie = Instantiate(zombiePrefab, path.waypoints[0].position, Quaternion.identity);
+            zombie.GetComponent<Zombie>().Initialize(path, zombieController);
+        }
+          
 
         yield return new WaitForSeconds(Mathf.Max(0.01f, spawnInterval));
 

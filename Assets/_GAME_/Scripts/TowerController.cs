@@ -7,6 +7,7 @@ public class TowerController : MonoBehaviour
     public Transform[] firePoints;
     public Projectile projectilePrefab;
     public LayerMask zombieLayers;
+    [SerializeField] public GameObject towerArt;
 
     public float range = 5f;
     public float fireRate = 1f;
@@ -16,7 +17,7 @@ public class TowerController : MonoBehaviour
 
     private void Update()
     {
-        if (turret == null || firePoints.Length == 0 || projectilePrefab == null || fireRate <= 0f) return;
+        if (!GameManager.Instance.isNight || turret == null || firePoints.Length == 0 || projectilePrefab == null || fireRate <= 0f || !towerArt.activeSelf) return;
 
         Zombie target = FindTarget();
         if (target == null) return;

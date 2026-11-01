@@ -1,127 +1,80 @@
-
-using System.Collections.Generic;
 using UnityEngine;
 
+[RequireComponent(typeof(Rigidbody2D))]
 public class Zombie : MonoBehaviour
 {
     [SerializeField] public PathController path;
     [SerializeField] public float speed = 2f;
     [SerializeField] public bool canMove = true;
-    [SerializeField] private Rigidbody2D rb;
     [SerializeField] private float health = 50f;
     [SerializeField] private float radius = 0.35f;
 
-    private static readonly List<Zombie> zombies = new List<Zombie>();
-
-    private int waypointIndex;
-    private float offset;
-    private bool initialized;
-    private Vector2 nextPosition;
-
     [SerializeField] private GameObject zombieDeathEffectPrefab;
-
     [SerializeField] private SpriteRenderer zombieSpriteRenderer;
     [SerializeField] private Color bottomLeftColor = Color.green;
     [SerializeField] private Color bottomRightColor = Color.green;
     [SerializeField] private Color topLeftColor = Color.green;
     [SerializeField] private Color topRightColor = Color.green;
 
+    private Rigidbody2D rb;
+    private ZombieController controller;
+    private int waypointIndex;
+    private float offset;
+    private bool initialized;
+    private Vector2 nextPosition;
+
+    public float Radius => radius;
+    public Vector2 NextPosition => nextPosition;
+
+    private Color randomColor;
+
     private void Awake()
     {
-        if (rb == null) rb = GetComponent<Rigidbody2D>();
-
+        rb = GetComponent<Rigidbody2D>();
         rb.bodyType = RigidbodyType2D.Kinematic;
         rb.gravityScale = 0f;
         rb.constraints = RigidbodyConstraints2D.FreezeRotation;
         rb.linearVelocity = Vector2.zero;
     }
 
-    private void Start()
+    private void Update()
     {
-        if (path == null)
-            path = FindAnyObjectByType<PathController>();
+        canMove = GameManager.Instance.isNight;
+        if (!GameManager.Instance.isNight)
+            zombieSpriteRenderer.color = Color.Lerp(zombieSpriteRenderer.color, Color.black * 0.7f, 2 * Time.deltaTime);
+        else
+            zombieSpriteRenderer.color = Color.Lerp(zombieSpriteRenderer.color, randomColor, 2 * Time.deltaTime);
 
-        if (!initialized && path != null)
-            Initialize(path);
+
     }
 
-    public static Color RandomColor(Color bottomLeft, Color bottomRight, Color topLeft, Color topRight)
+    public void Initialize(PathController newPath, ZombieController newController)
     {
-        float x = UnityEngine.Random.value;
-        float y = UnityEngine.Random.value;
-
-        Color bottom = Color.Lerp(bottomLeft, bottomRight, x);
-        Color top = Color.Lerp(topLeft, topRight, x);
-
-        return Color.Lerp(bottom, top, y);
-    }
-
-    public void Initialize(PathController newPath)
-    {
-        if (newPath == null || newPath.waypoints == null || newPath.waypoints.Length < 2)
-        {
-            enabled = false;
-            return;
-        }
-
-        zombieSpriteRenderer.color = RandomColor(bottomLeftColor, bottomRightColor, topLeftColor, topRightColor);
+        if (initialized) return;
 
         path = newPath;
-        waypointIndex = 1;
+        controller = newController;
 
-        float maxOffset = Mathf.Max(0f, path.offset / 2f - radius);
-
-        for (int i = 0; i < 20; i++)
+        if (!controller.TryGetSpawnPoint(this, path, out Vector3 position, out offset))
         {
-            offset = Random.Range(-maxOffset, maxOffset);
-            Vector3 position = path.GetOffsetPoint(0, offset);
-
-            if (IsBlocked(position)) continue;
-
-            transform.position = position;
-            rb.position = position;
-            nextPosition = position;
-
-            initialized = true;
-            enabled = true;
-            zombies.Add(this);
+            Destroy(gameObject);
             return;
         }
-        
-        Destroy(gameObject);
-        
+
+        waypointIndex = 1;
+        transform.position = position;
+        rb.position = position;
+        nextPosition = position;
+
+        randomColor = RandomColor(bottomLeftColor, bottomRightColor, topLeftColor, topRightColor);
+        zombieSpriteRenderer.color = randomColor;
+
+        initialized = true;
+        enabled = true;
+        controller.Register(this);
     }
 
-    public void TakeDamage(float damage)
-    {
-        if (health <= 0f || damage <= 0f) return;
-
-        health -= damage;
-
-        if (health <= 0f)
-        {
-            var deathEffect = Instantiate(zombieDeathEffectPrefab, transform.position, Quaternion.identity);
-            Destroy(deathEffect, 1f);
-            Destroy(gameObject);
-        }
-    }
-
-    private bool IsBlocked(Vector2 position)
-    {
-        foreach (Zombie zombie in zombies)
-        {
-            if (zombie == null || zombie == this) continue;
-
-            float distance = radius + zombie.radius;
-
-            if ((zombie.nextPosition - position).sqrMagnitude < distance * distance)
-                return true;
-        }
-
-        return false;
-    }
-
-    private void FixedUpdate()
+    public void Move()
     {
         if (!initialized || !canMove || waypointIndex >= path.waypoints.Length)
         {
@@ -140,7 +93,7 @@ public class Zombie : MonoBehaviour
 
         Vector2 next = Vector2.MoveTowards(rb.position, target, speed * Time.fixedDeltaTime);
 
-        if (IsBlocked(next))
+        if (controller.IsBlocked(this, next))
         {
             rb.linearVelocity = Vector2.zero;
             return;
@@ -150,8 +103,37 @@ public class Zombie : MonoBehaviour
         rb.MovePosition(next);
     }
 
+    public void TakeDamage(float damage)
+    {
+        if (health <= 0f || damage <= 0f) return;
+
+        health -= damage;
+
+        if (health <= 0f)
+        {
+            GameManager.Instance.AddScrap(controller.scrapPerZombie);
+            
+            var deathEffect = Instantiate(zombieDeathEffectPrefab, transform.position, Quaternion.identity);
+
+            Destroy(deathEffect, 1f);
+            Destroy(gameObject);
+        }
+    }
+
+    public static Color RandomColor(Color bottomLeft, Color bottomRight, Color topLeft, Color topRight)
+    {
+        float x = Random.value;
+        float y = Random.value;
+
+        Color bottom = Color.Lerp(bottomLeft, bottomRight, x);
+        Color top = Color.Lerp(topLeft, topRight, x);
+
+        return Color.Lerp(bottom, top, y);
+    }
+
     private void OnDestroy()
     {
-        zombies.Remove(this);
+        if (initialized && controller != null)
+            controller.Unregister(this);
     }
 }
