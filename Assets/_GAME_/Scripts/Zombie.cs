@@ -10,11 +10,12 @@ public class Zombie : MonoBehaviour
     [SerializeField] private float radius = 0.35f;
 
     [SerializeField] private GameObject zombieDeathEffectPrefab;
-    [SerializeField] private SpriteRenderer zombieSpriteRenderer;
+    [SerializeField] private SpriteRenderer[] zombieSpriteRenderers;
     [SerializeField] private Color bottomLeftColor = Color.green;
     [SerializeField] private Color bottomRightColor = Color.green;
     [SerializeField] private Color topLeftColor = Color.green;
     [SerializeField] private Color topRightColor = Color.green;
+    private SpriteRenderer zombieSpriteRenderer;
 
     private Rigidbody2D rb;
     private ZombieController controller;
@@ -35,6 +36,9 @@ public class Zombie : MonoBehaviour
         rb.gravityScale = 0f;
         rb.constraints = RigidbodyConstraints2D.FreezeRotation;
         rb.linearVelocity = Vector2.zero;
+        var r = Random.Range(0, zombieSpriteRenderers.Length);
+        zombieSpriteRenderer = zombieSpriteRenderers[r];
+        zombieSpriteRenderers[r].gameObject.SetActive(true);
     }
 
     private void Update()

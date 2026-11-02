@@ -36,6 +36,8 @@ public class ZombieSpawner : MonoBehaviour
             numberOfSpawners += 1;            
         }
 
+        spawnInterval = Mathf.Max(0.1f, spawnInterval);
+
     }
 
     public void SpawnWave()

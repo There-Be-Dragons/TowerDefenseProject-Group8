@@ -1,0 +1,167 @@
+# Repository Settings > Secrets and variables > Actions > Repository secrets:
+#   UNITY_EMAIL: Unity account username (email address).
+#   UNITY_PASSWORD: Password for that Unity account.
+#   UNITY_LICENSE: Entire activated .ulf file, including its XML, pasted as text.
+#                  Do not use a file path, serial number, or base64 encoding.
+# Setup: https://game.ci/docs/github/activation/
+#
+# Download the artifact ZIP from the completed Actions run and upload it to
+# itch.io as an HTML game, with "This file will be played in the browser" set.
+# The downloaded ZIP itself has index.html at its root; no repacking is needed.
+# This workflow builds and stores an artifact only; publishing is manual.
+name: Build WebGL for itch.io
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+    paths:
+      - 'Assets/**'
+      - 'Packages/**'
+      - 'ProjectSettings/**'
+      - '.github/workflows/build-webgl.yml'
+
+permissions:
+  contents: read
+
+# Serialize builds across branches to avoid competing for the same Unity license.
+concurrency:
+  group: unity-webgl-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Unity WebGL
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Check required Unity secrets
+        env:
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import xml.etree.ElementTree as ET
+
+          required = ("UNITY_EMAIL", "UNITY_PASSWORD", "UNITY_LICENSE")
+          missing = [name for name in required if not os.environ.get(name, "").strip()]
+          if missing:
+              raise SystemExit("::error::Missing repository secrets: " + ", ".join(missing))
+          try:
+              ET.fromstring(os.environ["UNITY_LICENSE"].strip())
+          except ET.ParseError:
+              raise SystemExit(
+                  "::error::UNITY_LICENSE must contain the full .ulf XML file contents."
+              ) from None
+          print("All three Unity secrets are configured; license XML is well formed.")
+          PY
+
+      - name: Check out project
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          lfs: true
+          persist-credentials: false
+
+      # Unity's Docker image, asset imports, and WebGL compiler need substantial
+      # temporary disk space. These unused SDKs are on the hosted runner only.
+      - name: Free runner disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
+          docker image prune --all --force
+          df -h /
+
+      - name: Configure WebGL hosting in the CI checkout
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          settings = Path("ProjectSettings/ProjectSettings.asset")
+          text = settings.read_text(encoding="utf-8")
+          overrides = {
+              "webGLCompressionFormat": 1,     # Gzip keeps downloads small.
+              "webGLDecompressionFallback": 1, # Works without custom server headers.
+              "webGLThreadsSupport": 0,        # Avoid requiring cross-origin isolation.
+          }
+          for key, value in overrides.items():
+              text, count = re.subn(
+                  rf"(?m)^(  {key}:)[^\r\n]*$", rf"\g<1> {value}", text
+              )
+              if count != 1:
+                  raise SystemExit(f"::error::Expected exactly one {key} setting.")
+          settings.write_text(text, encoding="utf-8")
+          PY
+
+      # Intentionally no Library cache: saves persistent Actions storage, at the
+      # cost of importing assets again each run. Never upload the project root.
+      - name: Build WebGL
+        uses: game-ci/unity-builder@v4
+        env:
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+        with:
+          projectPath: .
+          # Read the exact version from ProjectSettings/ProjectVersion.txt.
+          unityVersion: auto
+          targetPlatform: WebGL
+          buildsPath: build
+          buildName: TowerDefenseProject-Group8
+          # No tag history is needed for a shallow checkout with no version bump.
+          versioning: None
+          # The hosting overrides above intentionally modify only the CI copy.
+          allowDirtyBuild: true
+
+      - name: Check itch.io HTML5 upload limits
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+
+          root = Path("build/WebGL/TowerDefenseProject-Group8")
+          if not (root / "index.html").is_file():
+              raise SystemExit("::error::WebGL build is missing its root index.html.")
+          files = sorted(path for path in root.rglob("*") if path.is_file())
+          total = sum(path.stat().st_size for path in files)
+          # https://itch.io/docs/creators/html5#zip-file-requirements
+          errors = []
+          if len(files) > 1000:
+              errors.append("More than 1,000 files in the WebGL build.")
+          if total > 500_000_000:
+              errors.append("Extracted WebGL build exceeds itch.io's 500 MB limit.")
+          for path in files:
+              relative = path.relative_to(root).as_posix()
+              if path.stat().st_size > 200_000_000:
+                  errors.append(f"File exceeds itch.io's 200 MB limit: {relative}")
+              if len(relative) > 240:
+                  errors.append(f"Path exceeds itch.io's 240 character limit: {relative}")
+          if errors:
+              raise SystemExit("\n".join("::error::" + error for error in errors))
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write(
+                  f"WebGL build: {len(files)} files, {total / 1_000_000:.1f} MB.\n\n"
+                  "Download **TowerDefenseProject-Group8-WebGL** from this run's "
+                  "Artifacts and upload that ZIP directly to itch.io as an HTML game. "
+                  "The artifact expires after **1 day**.\n"
+              )
+          PY
+
+      # Upload only the playable directory: the artifact ZIP has index.html at
+      # its root. One-day retention limits storage growth across repeated runs.
+      # Your account's remaining Actions quota still applies across all repos.
+      - name: Upload itch.io-ready ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: TowerDefenseProject-Group8-WebGL
+          path: build/WebGL/TowerDefenseProject-Group8/
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 9
