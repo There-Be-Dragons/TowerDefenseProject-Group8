@@ -5,6 +5,7 @@ public class Projectile : MonoBehaviour
 {
     public float speed = 10f;
     public float damage = 15f;
+    [Min(0.01f)] public float lifetime = 4f;
 
     private Rigidbody2D rb;
 
@@ -17,7 +18,7 @@ public class Projectile : MonoBehaviour
 
     private void Start()
     {
-        Destroy(gameObject, 4f);
+        Destroy(gameObject, lifetime);
     }
 
     public void Fire(Vector2 direction)

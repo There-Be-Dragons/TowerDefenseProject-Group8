@@ -9,25 +9,69 @@ public class Zombie : MonoBehaviour
     [SerializeField] private float health = 50f;
     [SerializeField] private float radius = 0.35f;
 
+    [SerializeField, Min(0f)] private float attackDamage = 10f;
+    [SerializeField, Min(0.01f)] private float attackInterval = 1f;
+    [SerializeField, Min(0f)] private float attackReach = 0.25f;
+
     [SerializeField] private GameObject zombieDeathEffectPrefab;
     [SerializeField] private SpriteRenderer[] zombieSpriteRenderers;
     [SerializeField] private Color bottomLeftColor = Color.green;
     [SerializeField] private Color bottomRightColor = Color.green;
     [SerializeField] private Color topLeftColor = Color.green;
     [SerializeField] private Color topRightColor = Color.green;
-    private SpriteRenderer zombieSpriteRenderer;
 
+    private SpriteRenderer zombieSpriteRenderer;
     private Rigidbody2D rb;
     private ZombieController controller;
     private int waypointIndex;
     private float offset;
     private bool initialized;
     private Vector2 nextPosition;
+    private float nextAttack;
+    private Color randomColor;
+    private Color currentColor;
+    private bool nightAppearance = true;
+    private bool fading;
+    private float scrapReward;
+    private float scrapMultiplier = 1f;
+    private bool moving;
 
     public float Radius => radius;
     public Vector2 NextPosition => nextPosition;
+    public bool IsAlive => initialized && health > 0f;
 
-    private Color randomColor;
+    public Vector2 GetPredictedPosition(float seconds)
+    {
+        Vector2 position = rb.position;
+        if (!initialized || !moving || !canMove || health <= 0f || speed <= 0f) return position;
+
+        float distance = speed * Mathf.Max(0f, seconds);
+
+        for (int i = waypointIndex; i < path.waypoints.Length; i++)
+        {
+            Vector2 waypoint = path.GetOffsetPoint(i, offset);
+            float segmentLength = Vector2.Distance(position, waypoint);
+
+            if (distance <= segmentLength) return Vector2.MoveTowards(position, waypoint, distance);
+
+            position = waypoint;
+            distance -= segmentLength;
+        }
+
+        return position;
+    }
+
+    public void ApplySpawnScaling(float healthMultiplier, float speedMultiplier, float sizeMultiplier = 1f, float damageMultiplier = 1f,
+        float rewardMultiplier = 1f)
+    {
+        if (initialized) return;
+
+        health *= Mathf.Max(0.01f, healthMultiplier);
+        speed *= Mathf.Max(0.01f, speedMultiplier);
+        attackDamage *= Mathf.Max(0f, damageMultiplier);
+        scrapMultiplier = Mathf.Max(0f, rewardMultiplier);
+        zombieSpriteRenderer.transform.localScale *= Mathf.Max(0.01f, sizeMultiplier);
+    }
 
     private void Awake()
     {
@@ -36,41 +80,64 @@ public class Zombie : MonoBehaviour
         rb.gravityScale = 0f;
         rb.constraints = RigidbodyConstraints2D.FreezeRotation;
         rb.linearVelocity = Vector2.zero;
+
         var r = Random.Range(0, zombieSpriteRenderers.Length);
         zombieSpriteRenderer = zombieSpriteRenderers[r];
         zombieSpriteRenderers[r].gameObject.SetActive(true);
     }
 
-    private void Update()
+    public void UpdateAppearance(bool isNight, float blend)
     {
-        canMove = GameManager.Instance.isNight;
-        if (!GameManager.Instance.isNight)
-            zombieSpriteRenderer.color = Color.Lerp(zombieSpriteRenderer.color, Color.black * 0.7f, 2 * Time.deltaTime);
-        else
-            zombieSpriteRenderer.color = Color.Lerp(zombieSpriteRenderer.color, randomColor, 2 * Time.deltaTime);
+        canMove = isNight;
 
+        if (nightAppearance != isNight)
+        {
+            nightAppearance = isNight;
+            fading = true;
+        }
 
+        if (!fading) return;
+
+        Color target = isNight ? randomColor : Color.black * 0.7f;
+        currentColor = Color.Lerp(currentColor, target, blend);
+
+        if (((Vector4)(currentColor - target)).sqrMagnitude < 0.0001f)
+        {
+            currentColor = target;
+            fading = false;
+        }
+
+        zombieSpriteRenderer.color = currentColor;
     }
 
     public void Initialize(PathController newPath, ZombieController newController)
     {
         if (initialized) return;
 
-        path = newPath;
-        controller = newController;
-
-        if (!controller.TryGetSpawnPoint(this, path, out Vector3 position, out offset))
+        if (!newController.TryGetSpawnPoint(this, newPath, out Vector3 position, out float laneOffset))
         {
             Destroy(gameObject);
             return;
         }
 
+        Initialize(newPath, newController, position, laneOffset);
+    }
+
+    public void Initialize(PathController newPath, ZombieController newController, Vector3 position, float laneOffset)
+    {
+        if (initialized) return;
+
+        path = newPath;
+        controller = newController;
+        offset = laneOffset;
+        scrapReward = health * newController.scrapPerHealth * scrapMultiplier;
         waypointIndex = 1;
         transform.position = position;
         rb.position = position;
         nextPosition = position;
 
         randomColor = RandomColor(bottomLeftColor, bottomRightColor, topLeftColor, topRightColor);
+        currentColor = randomColor;
         zombieSpriteRenderer.color = randomColor;
 
         initialized = true;
@@ -78,20 +145,52 @@ public class Zombie : MonoBehaviour
         controller.Register(this);
     }
 
+    public bool CanAttackGate(Bounds area)
+    {
+        if (!initialized || !canMove || health <= 0f || waypointIndex < path.waypoints.Length - 1) return false;
+
+        Vector2 position = rb.position;
+        Vector2 closest = new Vector2(Mathf.Clamp(position.x, area.min.x, area.max.x), Mathf.Clamp(position.y, area.min.y, area.max.y));
+        float reach = radius + attackReach;
+
+        return (closest - position).sqrMagnitude <= reach * reach;
+    }
+
+    public void AttackGate(GateController gate)
+    {
+        StopMoving();
+
+        if (!canMove || health <= 0f || gate.IsDestroyed || Time.time < nextAttack) return;
+
+        nextAttack = Time.time + attackInterval;
+        gate.TakeDamage(attackDamage);
+    }
+
+    public void StopMoving()
+    {
+        moving = false;
+        rb.linearVelocity = Vector2.zero;
+
+        if (initialized)
+            controller.UpdatePosition(this, rb.position);
+
+        nextPosition = rb.position;
+    }
+
     public void Move()
     {
-        if (!initialized || !canMove || waypointIndex >= path.waypoints.Length)
+        if (!initialized || !canMove || health <= 0f || waypointIndex >= path.waypoints.Length)
         {
-            rb.linearVelocity = Vector2.zero;
+            StopMoving();
             return;
         }
 
         Vector2 target = path.GetOffsetPoint(waypointIndex, offset);
 
-        if (Vector2.Distance(rb.position, target) < 0.05f)
+        if ((target - rb.position).sqrMagnitude < 0.0025f)
         {
             waypointIndex++;
-            rb.linearVelocity = Vector2.zero;
+            StopMoving();
             return;
         }
 
@@ -99,10 +198,12 @@ public class Zombie : MonoBehaviour
 
         if (controller.IsBlocked(this, next))
         {
-            rb.linearVelocity = Vector2.zero;
+            StopMoving();
             return;
         }
 
+        controller.UpdatePosition(this, next);
+        moving = true;
         nextPosition = next;
         rb.MovePosition(next);
     }
@@ -115,10 +216,10 @@ public class Zombie : MonoBehaviour
 
         if (health <= 0f)
         {
-            GameManager.Instance.AddScrap(controller.scrapPerZombie);
-            
-            var deathEffect = Instantiate(zombieDeathEffectPrefab, transform.position, Quaternion.identity);
+            StopMoving();
+            GameManager.Instance.AddScrap(scrapReward);
 
+            var deathEffect = Instantiate(zombieDeathEffectPrefab, transform.position, Quaternion.identity);
             Destroy(deathEffect, 1f);
             Destroy(gameObject);
         }

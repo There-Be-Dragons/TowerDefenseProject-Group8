@@ -1,67 +1,111 @@
-
+using System.Collections.Generic;
 using UnityEngine;
 
 public class TowerController : MonoBehaviour
 {
+    public GameObject towerArt;
     public Transform turret;
     public Transform[] firePoints;
     public Projectile projectilePrefab;
     public LayerMask zombieLayers;
-    [SerializeField] public GameObject towerArt;
 
     public float range = 5f;
     public float fireRate = 1f;
     public float turnSpeed = 180f;
+    [Min(0f)] public float spreadAngle = 3.75f;
 
     private float nextShot;
+    private Zombie target;
+    private readonly List<Collider2D> hits = new List<Collider2D>();
 
     private void Update()
     {
-        if (!GameManager.Instance.isNight || turret == null || firePoints.Length == 0 || projectilePrefab == null || fireRate <= 0f || !towerArt.activeSelf) return;
+        if (!GameManager.Instance.isNight || Time.timeScale <= 0f || !towerArt.activeInHierarchy || fireRate <= 0f ||
+            projectilePrefab.speed <= 0f || firePoints.Length == 0) return;
 
-        Zombie target = FindTarget();
+        if (target == null || !target.IsAlive || !target.isActiveAndEnabled ||
+            ((Vector2)target.transform.position - (Vector2)transform.position).sqrMagnitude > range * range)
+            target = FindTarget();
         if (target == null) return;
 
-        Vector2 direction = target.transform.position - turret.position;
+        Vector2 origin = Vector2.zero;
+        foreach (Transform firePoint in firePoints) origin += (Vector2)firePoint.position;
+        origin /= firePoints.Length;
+
+        if (!TryGetAimPoint(target, origin, out Vector2 aimPoint)) return;
+
+        Vector2 direction = aimPoint - (Vector2)turret.position;
         if (direction.sqrMagnitude < 0.0001f) return;
 
-        float angle = Mathf.Atan2(direction.y, direction.x) * Mathf.Rad2Deg;
-        var rand = Random.Range(-3.75f, 3.75f);
-        Quaternion rotation = Quaternion.Euler(0f, 0f, angle - 90f + rand);
+        float angle = Mathf.Atan2(direction.y, direction.x) * Mathf.Rad2Deg - 90f;
+        Quaternion rotation = Quaternion.Euler(0f, 0f, angle + Random.Range(-spreadAngle, spreadAngle));
 
         turret.rotation = Quaternion.RotateTowards(turret.rotation, rotation, turnSpeed * Time.deltaTime);
 
-        Projectile projectile1 = null, projectile2 = null;
-
         if (Quaternion.Angle(turret.rotation, rotation) > 5f || Time.time < nextShot) return;
-        if(firePoints.Length >= 1)
+
+        float recoilAngle = Mathf.DeltaAngle(angle, turret.eulerAngles.z);
+        bool fired = false;
+        foreach (Transform firePoint in firePoints)
         {
-            projectile1 = Instantiate(projectilePrefab, firePoints[0].position, firePoints[0].rotation);
-            projectile1.Fire(firePoints[0].up);
+            if (!TryGetAimPoint(target, firePoint.position, out aimPoint)) continue;
+
+            direction = aimPoint - (Vector2)firePoint.position;
+            angle = Mathf.Atan2(direction.y, direction.x) * Mathf.Rad2Deg - 90f;
+            rotation = Quaternion.Euler(0f, 0f, angle + recoilAngle);
+
+            Projectile projectile = Instantiate(projectilePrefab, firePoint.position, rotation);
+            projectile.Fire(rotation * Vector3.up);
+            fired = true;
         }
 
-        if(firePoints.Length >= 2)
+        if (fired) nextShot = Time.time + 1f / fireRate;
+    }
+
+    private bool TryGetAimPoint(Zombie zombie, Vector2 origin, out Vector2 aimPoint)
+    {
+        float earliest = 0f;
+        float latest = projectilePrefab.lifetime;
+        float projectileSpeed = projectilePrefab.speed;
+        aimPoint = zombie.GetPredictedPosition(0f);
+
+        if (projectileSpeed <= 0f || latest <= 0f) return false;
+
+        Vector2 latestPosition = zombie.GetPredictedPosition(latest);
+        if ((latestPosition - origin).sqrMagnitude > projectileSpeed * projectileSpeed * latest * latest) return false;
+
+        for (int i = 0; i < 16; i++)
         {
-            projectile2 = Instantiate(projectilePrefab, firePoints[1].position, firePoints[1].rotation);
-            projectile2.Fire(firePoints[1].up);
-        }      
+            float time = (earliest + latest) * 0.5f;
+            Vector2 position = zombie.GetPredictedPosition(time);
+            float travelDistance = projectileSpeed * time;
 
-        
+            if ((position - origin).sqrMagnitude > travelDistance * travelDistance) earliest = time;
+            else latest = time;
+        }
 
-        nextShot = Time.time + 1f / fireRate;
+        aimPoint = zombie.GetPredictedPosition(latest);
+        return (aimPoint - origin).sqrMagnitude > 0.0001f;
     }
 
     private Zombie FindTarget()
     {
+        ContactFilter2D filter = new ContactFilter2D();
+        filter.SetLayerMask(zombieLayers);
+        filter.useTriggers = Physics2D.queriesHitTriggers;
+
+        Physics2D.OverlapCircle(transform.position, range, filter, hits);
+
         Zombie closest = null;
         float distance = range * range;
+        Vector2 position = transform.position;
 
-        foreach (Collider2D hit in Physics2D.OverlapCircleAll(transform.position, range, zombieLayers))
+        foreach (Collider2D hit in hits)
         {
             Zombie zombie = hit.GetComponentInParent<Zombie>();
-            if (zombie == null) continue;
+            if (zombie == null || !zombie.IsAlive || !zombie.isActiveAndEnabled) continue;
 
-            float current = ((Vector2)(zombie.transform.position - transform.position)).sqrMagnitude;
+            float current = ((Vector2)zombie.transform.position - position).sqrMagnitude;
 
             if (current < distance)
             {

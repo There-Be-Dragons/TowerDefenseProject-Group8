@@ -154,7 +154,7 @@ Rigidbody2D:
     m_Bits: 0
   m_ExcludeLayers:
     serializedVersion: 2
-    m_Bits: 896
+    m_Bits: 1920
   m_Interpolate: 0
   m_SleepingMode: 1
   m_CollisionDetection: 0
@@ -172,7 +172,8 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::Projectile
   speed: 35
-  damage: 3.33
+  damage: 3.66
+  lifetime: 4
 --- !u!1 &8369168490333066730
 GameObject:
   m_ObjectHideFlags: 0
