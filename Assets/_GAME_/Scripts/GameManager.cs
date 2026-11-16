@@ -9,6 +9,9 @@ public class GameManager : MonoBehaviour
     [SerializeField] private float nightLength = 90f;
     public int scrap;
     [SerializeField] private int startingScrap = 50;
+    [SerializeField] private SpriteRenderer nightSprite;
+    [SerializeField, Range(0f, 1f)] private float nightAlpha = 0.6f;
+    [SerializeField, Min(0.01f)] private float nightFadeSpeed = 2f;
     
 
     public bool isNight;
@@ -105,6 +108,13 @@ public class GameManager : MonoBehaviour
     private void Awake()
     {
         instance = this;
+
+        if (nightSprite != null)
+        {
+            Color color = nightSprite.color;
+            color.a = 0f;
+            nightSprite.color = color;
+        }
     }
 
     private void Start()
@@ -133,6 +143,13 @@ public class GameManager : MonoBehaviour
         {
             if (isNight) StartDay();
             else StartNight();
+        }
+
+        if (nightSprite != null)
+        {
+            Color color = nightSprite.color;
+            color.a = Mathf.Lerp(color.a, isNight ? nightAlpha : 0f, nightFadeSpeed * Time.deltaTime);
+            nightSprite.color = color;
         }
     }
 

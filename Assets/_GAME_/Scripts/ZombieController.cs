@@ -11,6 +11,7 @@ public class ZombieController : MonoBehaviour
     private readonly Dictionary<Vector2Int, List<Zombie>> cells = new Dictionary<Vector2Int, List<Zombie>>();
     private readonly Stack<List<Zombie>> spareCells = new Stack<List<Zombie>>();
     private float largestRadius;
+    private int nextMovementOrder;
 
     public int ActiveZombieCount => zombies.Count;
 
@@ -56,6 +57,7 @@ public class ZombieController : MonoBehaviour
     {
         if (zombies.Contains(zombie)) return;
 
+        zombie.MovementOrder = nextMovementOrder++;
         zombies.Add(zombie);
         largestRadius = Mathf.Max(largestRadius, zombie.Radius);
         AddToCell(zombie, GetCell(zombie.NextPosition));
@@ -86,6 +88,20 @@ public class ZombieController : MonoBehaviour
 
     public bool IsBlocked(Zombie movingZombie, Vector2 position)
     {
+        return TryGetBlocker(movingZombie, position, out _);
+    }
+
+    public bool TryGetBlocker(Zombie movingZombie, Vector2 position, out Zombie blocker, bool resolveDeadlocks = false)
+    {
+        blocker = null;
+
+        if (resolveDeadlocks && movingZombie.BlockedBy != null &&
+            BlocksMovement(movingZombie, movingZombie.BlockedBy, position, true))
+        {
+            blocker = movingZombie.BlockedBy;
+            return true;
+        }
+
         float searchRadius = movingZombie.Radius + largestRadius;
         Vector2Int min = GetCell(position - Vector2.one * searchRadius);
         Vector2Int max = GetCell(position + Vector2.one * searchRadius);
@@ -98,17 +114,26 @@ public class ZombieController : MonoBehaviour
 
                 foreach (Zombie zombie in nearby)
                 {
-                    if (zombie == movingZombie || !zombie.gameObject.activeInHierarchy) continue;
+                    if (!BlocksMovement(movingZombie, zombie, position, resolveDeadlocks)) continue;
 
-                    float distance = movingZombie.Radius + zombie.Radius;
-
-                    if ((zombie.NextPosition - position).sqrMagnitude < distance * distance)
-                        return true;
+                    blocker = zombie;
+                    return true;
                 }
             }
         }
 
         return false;
+    }
+
+    private bool BlocksMovement(Zombie movingZombie, Zombie zombie, Vector2 position, bool resolveDeadlocks)
+    {
+        if (zombie == movingZombie || !zombie.IsAlive || !zombie.gameObject.activeInHierarchy) return false;
+
+        float distance = movingZombie.Radius + zombie.Radius;
+        if ((zombie.NextPosition - position).sqrMagnitude >= distance * distance) return false;
+
+        return !resolveDeadlocks || !zombie.isActiveAndEnabled || !zombie.canMove ||
+            zombie.BlockedBy != movingZombie || !movingZombie.HasTravelPriorityOver(zombie);
     }
 
     public void UpdatePosition(Zombie zombie, Vector2 position)

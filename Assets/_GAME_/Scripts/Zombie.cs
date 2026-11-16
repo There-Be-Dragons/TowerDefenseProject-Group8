@@ -35,10 +35,33 @@ public class Zombie : MonoBehaviour
     private float scrapReward;
     private float scrapMultiplier = 1f;
     private bool moving;
+    private float distanceTraveled;
+    private Vector2 lastPosition;
+    private Zombie blockedBy;
 
     public float Radius => radius;
     public Vector2 NextPosition => nextPosition;
     public bool IsAlive => initialized && health > 0f;
+    internal Zombie BlockedBy => blockedBy;
+    internal int MovementOrder { get; set; }
+
+    private void UpdateDistanceTraveled()
+    {
+        if (!initialized) return;
+
+        distanceTraveled += Vector2.Distance(lastPosition, rb.position);
+        lastPosition = rb.position;
+    }
+
+    internal bool HasTravelPriorityOver(Zombie zombie)
+    {
+        UpdateDistanceTraveled();
+        zombie.UpdateDistanceTraveled();
+
+        if (distanceTraveled != zombie.distanceTraveled) return distanceTraveled > zombie.distanceTraveled;
+
+        return MovementOrder < zombie.MovementOrder;
+    }
 
     public Vector2 GetPredictedPosition(float seconds)
     {
@@ -135,6 +158,9 @@ public class Zombie : MonoBehaviour
         transform.position = position;
         rb.position = position;
         nextPosition = position;
+        lastPosition = position;
+        distanceTraveled = 0f;
+        blockedBy = null;
 
         randomColor = RandomColor(bottomLeftColor, bottomRightColor, topLeftColor, topRightColor);
         currentColor = randomColor;
@@ -168,6 +194,8 @@ public class Zombie : MonoBehaviour
 
     public void StopMoving()
     {
+        UpdateDistanceTraveled();
+        blockedBy = null;
         moving = false;
         rb.linearVelocity = Vector2.zero;
 
@@ -179,6 +207,8 @@ public class Zombie : MonoBehaviour
 
     public void Move()
     {
+        UpdateDistanceTraveled();
+
         if (!initialized || !canMove || health <= 0f || waypointIndex >= path.waypoints.Length)
         {
             StopMoving();
@@ -196,12 +226,14 @@ public class Zombie : MonoBehaviour
 
         Vector2 next = Vector2.MoveTowards(rb.position, target, speed * Time.fixedDeltaTime);
 
-        if (controller.IsBlocked(this, next))
+        if (controller.TryGetBlocker(this, next, out Zombie blocker, resolveDeadlocks: true))
         {
             StopMoving();
+            blockedBy = blocker;
             return;
         }
 
+        blockedBy = null;
         controller.UpdatePosition(this, next);
         moving = true;
         nextPosition = next;

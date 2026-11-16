@@ -6,6 +6,7 @@ public class TowerController : MonoBehaviour
     public GameObject towerArt;
     public Transform turret;
     public Transform[] firePoints;
+    public ParticleSystem[] muzzleFlashes;
     public Projectile projectilePrefab;
     public LayerMask zombieLayers;
 
@@ -46,8 +47,9 @@ public class TowerController : MonoBehaviour
 
         float recoilAngle = Mathf.DeltaAngle(angle, turret.eulerAngles.z);
         bool fired = false;
-        foreach (Transform firePoint in firePoints)
+        for (int i = 0; i < firePoints.Length; i++)
         {
+            Transform firePoint = firePoints[i];
             if (!TryGetAimPoint(target, firePoint.position, out aimPoint)) continue;
 
             direction = aimPoint - (Vector2)firePoint.position;
@@ -56,6 +58,13 @@ public class TowerController : MonoBehaviour
 
             Projectile projectile = Instantiate(projectilePrefab, firePoint.position, rotation);
             projectile.Fire(rotation * Vector3.up);
+
+            if (muzzleFlashes != null && i < muzzleFlashes.Length && muzzleFlashes[i] != null)
+            {
+                muzzleFlashes[i].Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
+                muzzleFlashes[i].Play();
+            }
+
             fired = true;
         }
 
